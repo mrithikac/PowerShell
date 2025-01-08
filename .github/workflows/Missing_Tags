@@ -1,0 +1,77 @@
+workflow MissingTagCheck_0 {
+
+    inlineScript {
+        try {
+            Write-Output "Logging in to Azure..."
+            Connect-AzAccount -Identity
+        }
+        catch {
+            Write-Error -Message $_.Exception
+            throw $_.Exception
+        }
+        
+        # Get all subscriptions in the tenant
+        $subscriptions = Get-AzSubscription
+        $resourceGroups = @()
+        $out = @()
+      
+
+            # Set context to the current subscription
+            Set-AzContext -SubscriptionObject $subscription
+
+            Write-Host "Processing subscription: $($subscription.Name)"
+
+            # Get all resource groups in the current subscription
+            $groups = Get-AzResourceGroup
+            ForEach ($currGroup in $groups) {
+                Write-Host "Processing resource group: $($currGroup.ResourceGroupName) in subscription: $($subscription.Name)"
+
+                # Create a temporary object to hold resource group information
+                $temp = "" | Select-Object Name, Subscription, Dept, CostRecovery, ContactName, ContactEmail
+                $temp.Name = $currGroup.ResourceGroupName
+                $temp.Subscription = $subscription.Name
+                $temp.Dept = $currGroup.Tags['Dept']
+                $temp.CostRecovery = $currGroup.Tags['CostRecovery']
+                $temp.ContactName = $currGroup.Tags['ContactName']
+                $temp.ContactEmail = $currGroup.Tags['ContactEmail']
+                $resourceGroups += $temp
+            }
+        }
+
+        # Filter out the resource groups missing the specified tags
+        $missingTags = $resourceGroups | Where-Object {
+            ($_.Dept -eq $null) -or
+            ($_.CostRecovery -eq $null) -or
+            ($_.ContactName -eq $null) -or
+            ($_.ContactEmail -eq $null)
+        }
+
+        # Sort the object by name
+        $missingTags = $missingTags | Sort-Object Name
+
+        # Check if there are any missing tags
+        if ($missingTags.Count -gt 0) {
+            # Missing tags found, format output for email
+            $subject = "Azure Missing Tags Report"
+            [string]$rgTags = $missingTags | Select-Object @{n = "ResourceGroupName"; e = {$_.Name}}, @{n = "SubscriptionName"; e = {$_.Subscription}}, @{n = "Dept"; e = {$_.Dept}}, @{n = "CostRecovery"; e = {$_.CostRecovery}}, @{n = "ContactName"; e = {$_.ContactName}}, @{n = "ContactEmail"; e = {$_.ContactEmail}} | ConvertTo-HTML -Fragment
+            $htmlbody = ("<h2>Missing Tags Report</h2>{0}" -f $rgTags)
+
+            # smtp mailing details
+            $smtpserver = "smtp.sendgrid.net"
+            $smtpport = 587
+            $username = "apikey"
+            $pwd = "#your info"
+            $securepwd = ConvertTo-SecureString $pwd -AsPlainText -Force
+            $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $username, $securepwd
+
+            $from = ("#sender email")
+            $recipients = @("#your email")
+            
+            # Send the email with the missing tags report
+            Send-MailMessage -From $from -Subject $subject -To $recipients -Body $htmlbody -BodyAsHtml -Usessl -Port $smtpport -SmtpServer $smtpserver -Credential $credential
+        }
+        else {
+            Write-Output "No resource groups have missing tags. No email sent."
+        }
+    }
+}
